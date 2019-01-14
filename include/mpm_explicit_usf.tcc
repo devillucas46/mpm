@@ -23,13 +23,23 @@ bool mpm::MPMExplicitUSF<Tdim>::solve() {
 
   // Phase
   const unsigned phase = 0;
+
+  // Test if checkpoint resume is needed
+  bool resume = false;
+  if (analysis_.find("resume") != analysis_.end())
+    resume = analysis_["resume"]["resume"].template get<bool>();
+
   // Initialise material
   bool mat_status = this->initialise_materials();
   if (!mat_status) status = false;
 
-  // Initialise mesh and materials
-  bool mesh_status = this->initialise_mesh_particles();
+  // Initialise mesh
+  bool mesh_status = this->initialise_mesh();
   if (!mesh_status) status = false;
+
+  // Initialise particles
+  bool particle_status = this->initialise_particles();
+  if (!particle_status) status = false;
 
   // Assign material to particles
   // Get mesh properties
@@ -45,15 +55,12 @@ bool mpm::MPMExplicitUSF<Tdim>::solve() {
       std::bind(&mpm::ParticleBase<Tdim>::assign_material,
                 std::placeholders::_1, material));
 
+  // Check point resume
+  if (resume) this->checkpoint_resume();
+
   // Compute mass
   mesh_->iterate_over_particles(std::bind(
       &mpm::ParticleBase<Tdim>::compute_mass, std::placeholders::_1, phase));
-
-  // Test if checkpoint resume is needed
-  bool resume = false;
-  if (analysis_.find("resume") != analysis_.end())
-    resume = analysis_["resume"]["resume"].template get<bool>();
-  if (resume) this->checkpoint_resume();
 
   auto solver_begin = std::chrono::steady_clock::now();
   // Main loop
@@ -73,7 +80,7 @@ bool mpm::MPMExplicitUSF<Tdim>::solve() {
       mesh_->iterate_over_cells(
           std::bind(&mpm::Cell<Tdim>::activate_nodes, std::placeholders::_1));
 
-      mesh_->find_active_nodes();
+      // mesh_->find_active_nodes();
     });
 
     // Spawn a task for particles
@@ -109,8 +116,10 @@ bool mpm::MPMExplicitUSF<Tdim>::solve() {
 #endif
 
     // Compute nodal velocity
-    mesh_->iterate_over_active_nodes(std::bind(
-        &mpm::NodeBase<Tdim>::compute_velocity, std::placeholders::_1));
+    mesh_->iterate_over_nodes_predicate(
+        std::bind(&mpm::NodeBase<Tdim>::compute_velocity,
+                  std::placeholders::_1),
+        std::bind(&mpm::NodeBase<Tdim>::status, std::placeholders::_1));
 
     // Iterate over each particle to calculate strain
     mesh_->iterate_over_particles(
@@ -133,6 +142,9 @@ bool mpm::MPMExplicitUSF<Tdim>::solve() {
       mesh_->iterate_over_particles(
           std::bind(&mpm::ParticleBase<Tdim>::map_traction_force,
                     std::placeholders::_1, phase));
+
+      //! Nodal tractions
+      if (nodal_tractions_) this->apply_nodal_tractions();
     });
 
     // Spawn a task for internal force
@@ -165,14 +177,22 @@ bool mpm::MPMExplicitUSF<Tdim>::solve() {
 #endif
 
     // Iterate over active nodes to compute acceleratation and velocity
-    mesh_->iterate_over_active_nodes(
+    mesh_->iterate_over_nodes_predicate(
         std::bind(&mpm::NodeBase<Tdim>::compute_acceleration_velocity,
-                  std::placeholders::_1, phase, this->dt_));
+                  std::placeholders::_1, phase, this->dt_),
+        std::bind(&mpm::NodeBase<Tdim>::status, std::placeholders::_1));
 
-    // Iterate over each particle to compute updated position
-    mesh_->iterate_over_particles(
-        std::bind(&mpm::ParticleBase<Tdim>::compute_updated_position,
-                  std::placeholders::_1, phase, this->dt_));
+    // Use nodal velocity to update position
+    if (velocity_update_)
+      // Iterate over each particle to compute updated position
+      mesh_->iterate_over_particles(
+          std::bind(&mpm::ParticleBase<Tdim>::compute_updated_position_velocity,
+                    std::placeholders::_1, phase, this->dt_));
+    else
+      // Iterate over each particle to compute updated position
+      mesh_->iterate_over_particles(
+          std::bind(&mpm::ParticleBase<Tdim>::compute_updated_position,
+                    std::placeholders::_1, phase, this->dt_));
 
     // Iterate over each particle to update particle volume
     mesh_->iterate_over_particles(

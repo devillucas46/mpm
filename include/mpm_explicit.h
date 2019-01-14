@@ -31,11 +31,17 @@ class MPMExplicit : public MPM {
   //! Default constructor
   MPMExplicit(std::unique_ptr<IO>&& io);
 
-  //! Initialise mesh and particles
-  bool initialise_mesh_particles() override;
+  //! Initialise mesh
+  bool initialise_mesh() override;
+
+  //! Initialise particles
+  bool initialise_particles() override;
 
   //! Initialise materials
   bool initialise_materials() override;
+
+  //! Apply nodal tractions
+  bool apply_nodal_tractions() override;
 
   //! Solve
   bool solve() override = 0;
@@ -71,6 +77,8 @@ class MPMExplicit : public MPM {
   //! Logger
   using mpm::MPM::console_;
 
+  //! velocity update
+  bool velocity_update_{false};
   //! Gravity
   Eigen::Matrix<double, Tdim, 1> gravity_;
   //! Mesh object
@@ -79,6 +87,8 @@ class MPMExplicit : public MPM {
   std::map<unsigned, std::shared_ptr<mpm::Material<Tdim>>> materials_;
   //! VTK attributes
   std::vector<std::string> vtk_attributes_;
+  //! Bool nodal tractions
+  bool nodal_tractions_{true};
 
 };  // MPMExplicit class
 }  // namespace mpm

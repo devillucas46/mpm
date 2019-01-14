@@ -46,12 +46,16 @@ class MPMExplicitUSF : public MPMExplicit<Tdim> {
   //! Logger
   using mpm::MPMExplicit<Tdim>::console_;
 
+  //! Velocity update
+  using mpm::MPMExplicit<Tdim>::velocity_update_;
   //! Gravity
   using mpm::MPMExplicit<Tdim>::gravity_;
   //! Mesh object
   using mpm::MPMExplicit<Tdim>::mesh_;
   //! Materials
   using mpm::MPMExplicit<Tdim>::materials_;
+  //! Nodal tractions
+  using mpm::MPMExplicit<Tdim>::nodal_tractions_;
 
 };  // MPMExplicitUSF class
 }  // namespace mpm

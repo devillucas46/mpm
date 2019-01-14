@@ -397,8 +397,22 @@ TEST_CASE("Mesh is checked for 2D case", "[mesh][2D]") {
     // Compute cell volume
     cell1->compute_volume();
 
+    // Generate material points in cell
+    auto points = mesh->generate_material_points(1);
+    REQUIRE(points.size() == 0);
+
     // Add cell 1 and check
     REQUIRE(mesh->add_cell(cell1) == true);
+
+    // Generate material points in cell
+    points = mesh->generate_material_points(1);
+    REQUIRE(points.size() == 1);
+
+    points = mesh->generate_material_points(2);
+    REQUIRE(points.size() == 4);
+
+    points = mesh->generate_material_points(3);
+    REQUIRE(points.size() == 9);
 
     // Particle 1
     coords << 1.0, 1.0;
@@ -469,7 +483,7 @@ TEST_CASE("Mesh is checked for 2D case", "[mesh][2D]") {
       const std::string node_type = "N2D";
       // Global node index
       mpm::Index gnid = 0;
-      mesh->create_nodes(gnid, node_type, coordinates);
+      mesh->create_nodes(gnid, node_type, coordinates, false);
       // Check if mesh has added nodes
       REQUIRE(mesh->nnodes() == coordinates.size());
       // Try again this shouldn't add more coordinates
@@ -495,7 +509,7 @@ TEST_CASE("Mesh is checked for 2D case", "[mesh][2D]") {
 
         // Global cell index
         mpm::Index gcid = 0;
-        mesh->create_cells(gcid, element, cells);
+        mesh->create_cells(gcid, element, cells, false);
         // Check if mesh has added cells
         REQUIRE(mesh->ncells() == cells.size());
         // Try again this shouldn't add more cells
@@ -561,13 +575,64 @@ TEST_CASE("Mesh is checked for 2D case", "[mesh][2D]") {
             // Global particle index
             std::vector<mpm::Index> gpid(coordinates.size());
             std::iota(gpid.begin(), gpid.end(), 0);
-            mesh->create_particles(gpid, particle_type, coordinates);
+            mesh->create_particles(gpid, particle_type, coordinates, false);
             // Check if mesh has added particles
             REQUIRE(mesh->nparticles() == coordinates.size());
             // Try again this shouldn't add more coordinates
             mesh->create_particles(gpid, particle_type, coordinates);
             // Check if mesh has added particles
             REQUIRE(mesh->nparticles() == coordinates.size());
+
+            // Test assign particles cells
+            SECTION("Check assign particles cells") {
+              // Vector of particle cells
+              std::vector<std::array<mpm::Index, 2>> particles_cells;
+              // Particle cells
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({0, 0}));
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({1, 0}));
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({2, 0}));
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({3, 0}));
+
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({4, 1}));
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({5, 1}));
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({6, 1}));
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({7, 1}));
+
+              REQUIRE(mesh->assign_particles_cells(particles_cells) == true);
+
+              // Locate particles
+              auto missing_particles = mesh->locate_particles_mesh();
+              REQUIRE(missing_particles.size() == 0);
+
+              auto check_particles_cells = mesh->particles_cells();
+
+              REQUIRE(check_particles_cells.size() == mesh->nparticles());
+
+              for (unsigned i = 0; i < particles_cells.size(); ++i)
+                for (unsigned j = 0; j < 2; ++j)
+                  REQUIRE(check_particles_cells.at(i).at(j) ==
+                          particles_cells.at(i).at(j));
+            }
+
+            // Locate particles
+            auto missing_particles = mesh->locate_particles_mesh();
+            REQUIRE(missing_particles.size() == 0);
+
+            // Test assign particles cells again should fail
+            SECTION("Check assign particles cells") {
+              // Vector of particle cells
+              std::vector<std::array<mpm::Index, 2>> particles_cells;
+              // Particle cells
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({0, 0}));
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({1, 0}));
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({2, 0}));
+              particles_cells.emplace_back(std::array<mpm::Index, 2>(
+                  {3, std::numeric_limits<mpm::Index>::max()}));
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({50, 0}));
+
+              REQUIRE(mesh->assign_particles_cells(particles_cells) == false);
+            }
+
             // Clear coordinates and try creating a list of particles with
             // an empty list
             unsigned nparticles = coordinates.size();
@@ -625,6 +690,27 @@ TEST_CASE("Mesh is checked for 2D case", "[mesh][2D]") {
               REQUIRE(mesh->write_particles_hdf5(0, "particles-2d.h5") == true);
             }
 
+            // Test assign particles volumes
+            SECTION("Check assign particles volumes") {
+              // Vector of particle coordinates
+              std::vector<std::tuple<mpm::Index, double>> particles_volumes;
+              // Volumes
+              particles_volumes.emplace_back(std::make_tuple(0, 10.5));
+              particles_volumes.emplace_back(std::make_tuple(1, 10.5));
+
+              REQUIRE(mesh->nparticles() == 8);
+
+              REQUIRE(mesh->assign_particles_volumes(particles_volumes) ==
+                      true);
+
+              // When volume assignment fails
+              particles_volumes.emplace_back(std::make_tuple(2, 0.0));
+              particles_volumes.emplace_back(std::make_tuple(3, -10.0));
+
+              REQUIRE(mesh->assign_particles_volumes(particles_volumes) ==
+                      false);
+            }
+
             // Test assign particles tractions
             SECTION("Check assign particles tractions") {
               // Vector of particle coordinates
@@ -635,6 +721,8 @@ TEST_CASE("Mesh is checked for 2D case", "[mesh][2D]") {
               particles_tractions.emplace_back(std::make_tuple(1, 1, -10.5));
               particles_tractions.emplace_back(std::make_tuple(2, 0, -12.5));
               particles_tractions.emplace_back(std::make_tuple(3, 1, 0.0));
+
+              REQUIRE(mesh->nparticles() == 8);
 
               REQUIRE(mesh->assign_particles_tractions(particles_tractions) ==
                       false);
@@ -652,6 +740,27 @@ TEST_CASE("Mesh is checked for 2D case", "[mesh][2D]") {
               particles_tractions.emplace_back(std::make_tuple(300, 0, 0.0));
               REQUIRE(mesh->assign_particles_tractions(particles_tractions) ==
                       false);
+            }
+
+            // Test assign nodes tractions
+            SECTION("Check assign nodes tractions") {
+              // Vector of node coordinates
+              std::vector<std::tuple<mpm::Index, unsigned, double>>
+                  nodes_tractions;
+              // Tractions
+              nodes_tractions.emplace_back(std::make_tuple(0, 0, 10.5));
+              nodes_tractions.emplace_back(std::make_tuple(1, 1, -10.5));
+              nodes_tractions.emplace_back(std::make_tuple(2, 0, -12.5));
+              nodes_tractions.emplace_back(std::make_tuple(3, 1, 0.0));
+
+              REQUIRE(mesh->nnodes() == 6);
+
+              REQUIRE(mesh->assign_nodal_tractions(nodes_tractions) == true);
+              // When tractions fail
+              nodes_tractions.emplace_back(std::make_tuple(3, 2, 0.0));
+              REQUIRE(mesh->assign_nodal_tractions(nodes_tractions) == false);
+              nodes_tractions.emplace_back(std::make_tuple(300, 0, 0.0));
+              REQUIRE(mesh->assign_nodal_tractions(nodes_tractions) == false);
             }
 
             // Test assign particles stresses
@@ -1161,8 +1270,22 @@ TEST_CASE("Mesh is checked for 3D case", "[mesh][3D]") {
     // Compute cell volume
     cell1->compute_volume();
 
+    // Generate material points in cell
+    auto points = mesh->generate_material_points(1);
+    REQUIRE(points.size() == 0);
+
     // Add cell 1 and check
     REQUIRE(mesh->add_cell(cell1) == true);
+
+    // Generate material points in cell
+    points = mesh->generate_material_points(1);
+    REQUIRE(points.size() == 1);
+
+    points = mesh->generate_material_points(2);
+    REQUIRE(points.size() == 8);
+
+    points = mesh->generate_material_points(3);
+    REQUIRE(points.size() == 27);
 
     // Particle 1
     coords << 1.0, 1.0, 1.0;
@@ -1379,6 +1502,21 @@ TEST_CASE("Mesh is checked for 3D case", "[mesh][3D]") {
             mesh->create_particles(gpid, particle_type, coordinates);
             REQUIRE(mesh->nparticles() == nparticles);
 
+            // Test assign particles cells again should fail
+            SECTION("Check assign particles cells") {
+              // Vector of particle cells
+              std::vector<std::array<mpm::Index, 2>> particles_cells;
+              // Particle cells
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({0, 0}));
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({1, 0}));
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({2, 0}));
+              particles_cells.emplace_back(std::array<mpm::Index, 2>(
+                  {3, std::numeric_limits<mpm::Index>::max()}));
+              particles_cells.emplace_back(std::array<mpm::Index, 2>({50, 0}));
+
+              REQUIRE(mesh->assign_particles_cells(particles_cells) == false);
+            }
+
             const unsigned phase = 0;
             // Particles coordinates
             REQUIRE(mesh->particle_coordinates().size() == mesh->nparticles());
@@ -1419,10 +1557,69 @@ TEST_CASE("Mesh is checked for 3D case", "[mesh][3D]") {
               particles = mesh->locate_particles_mesh();
               // Should miss particle100
               REQUIRE(particles.size() == 0);
+
+              SECTION("Check return particles cells") {
+                // Vector of particle cells
+                std::vector<std::array<mpm::Index, 2>> particles_cells;
+                // Particle cells
+                particles_cells.emplace_back(std::array<mpm::Index, 2>({0, 0}));
+                particles_cells.emplace_back(std::array<mpm::Index, 2>({1, 0}));
+                particles_cells.emplace_back(std::array<mpm::Index, 2>({2, 0}));
+                particles_cells.emplace_back(std::array<mpm::Index, 2>({3, 0}));
+                particles_cells.emplace_back(std::array<mpm::Index, 2>({4, 0}));
+                particles_cells.emplace_back(std::array<mpm::Index, 2>({5, 0}));
+                particles_cells.emplace_back(std::array<mpm::Index, 2>({6, 0}));
+                particles_cells.emplace_back(std::array<mpm::Index, 2>({7, 0}));
+
+                particles_cells.emplace_back(std::array<mpm::Index, 2>({8, 1}));
+                particles_cells.emplace_back(std::array<mpm::Index, 2>({9, 1}));
+                particles_cells.emplace_back(
+                    std::array<mpm::Index, 2>({10, 1}));
+                particles_cells.emplace_back(
+                    std::array<mpm::Index, 2>({11, 1}));
+                particles_cells.emplace_back(
+                    std::array<mpm::Index, 2>({12, 1}));
+                particles_cells.emplace_back(
+                    std::array<mpm::Index, 2>({13, 1}));
+                particles_cells.emplace_back(
+                    std::array<mpm::Index, 2>({14, 1}));
+                particles_cells.emplace_back(
+                    std::array<mpm::Index, 2>({15, 1}));
+
+                auto check_particles_cells = mesh->particles_cells();
+
+                REQUIRE(check_particles_cells.size() == mesh->nparticles());
+
+                for (unsigned i = 0; i < particles_cells.size(); ++i)
+                  for (unsigned j = 0; j < 2; ++j)
+                    REQUIRE(check_particles_cells.at(i).at(j) ==
+                            particles_cells.at(i).at(j));
+              }
             }
             // Test HDF5
             SECTION("Write particles HDF5") {
               REQUIRE(mesh->write_particles_hdf5(0, "particles-3d.h5") == true);
+            }
+
+            // Test assign particles volumes
+            SECTION("Check assign particles volumes") {
+              // Vector of particle coordinates
+              std::vector<std::tuple<mpm::Index, double>> particles_volumes;
+              // Volumes
+              particles_volumes.emplace_back(std::make_tuple(0, 10.5));
+              particles_volumes.emplace_back(std::make_tuple(1, 10.5));
+
+              REQUIRE(mesh->nparticles() == 16);
+
+              REQUIRE(mesh->assign_particles_volumes(particles_volumes) ==
+                      true);
+
+              // When volume assignment fails
+              particles_volumes.emplace_back(std::make_tuple(2, 0.0));
+              particles_volumes.emplace_back(std::make_tuple(3, -10.0));
+
+              REQUIRE(mesh->assign_particles_volumes(particles_volumes) ==
+                      false);
             }
 
             // Test assign particles tractions
@@ -1452,6 +1649,27 @@ TEST_CASE("Mesh is checked for 3D case", "[mesh][3D]") {
               particles_tractions.emplace_back(std::make_tuple(300, 0, 0.0));
               REQUIRE(mesh->assign_particles_tractions(particles_tractions) ==
                       false);
+            }
+
+            // Test assign nodes tractions
+            SECTION("Check assign nodes tractions") {
+              // Vector of node coordinates
+              std::vector<std::tuple<mpm::Index, unsigned, double>>
+                  nodes_tractions;
+              // Tractions
+              nodes_tractions.emplace_back(std::make_tuple(0, 0, 10.5));
+              nodes_tractions.emplace_back(std::make_tuple(1, 1, -10.5));
+              nodes_tractions.emplace_back(std::make_tuple(2, 0, -12.5));
+              nodes_tractions.emplace_back(std::make_tuple(3, 1, 0.0));
+
+              REQUIRE(mesh->nnodes() == 12);
+
+              REQUIRE(mesh->assign_nodal_tractions(nodes_tractions) == true);
+              // When tractions fail
+              nodes_tractions.emplace_back(std::make_tuple(3, 4, 0.0));
+              REQUIRE(mesh->assign_nodal_tractions(nodes_tractions) == false);
+              nodes_tractions.emplace_back(std::make_tuple(300, 0, 0.0));
+              REQUIRE(mesh->assign_nodal_tractions(nodes_tractions) == false);
             }
 
             // Test assign particles stresses

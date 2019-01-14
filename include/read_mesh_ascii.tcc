@@ -293,6 +293,50 @@ std::vector<std::tuple<mpm::Index, unsigned, double>>
   return constraints;
 }
 
+//! Return particles volume
+template <unsigned Tdim>
+std::vector<std::tuple<mpm::Index, double>>
+    mpm::ReadMeshAscii<Tdim>::read_particles_volumes(
+        const std::string& volume_file) {
+
+  // particle volumes
+  std::vector<std::tuple<mpm::Index, double>> volumes;
+  volumes.clear();
+
+  // input file stream
+  std::fstream file;
+  file.open(volume_file.c_str(), std::ios::in);
+
+  try {
+    if (file.is_open() && file.good()) {
+      // Line
+      std::string line;
+      while (std::getline(file, line)) {
+        boost::algorithm::trim(line);
+        std::istringstream istream(line);
+        // ignore comment lines (# or !) or blank lines
+        if ((line.find('#') == std::string::npos) &&
+            (line.find('!') == std::string::npos) && (line != "")) {
+          while (istream.good()) {
+            // ID
+            mpm::Index id;
+            // Volume
+            double volume;
+            // Read stream
+            istream >> id >> volume;
+            volumes.emplace_back(std::make_tuple(id, volume));
+          }
+        }
+      }
+    }
+    file.close();
+  } catch (std::exception& exception) {
+    console_->error("Read volume : {}", exception.what());
+    file.close();
+  }
+  return volumes;
+}
+
 //! Return particles traction
 template <unsigned Tdim>
 std::vector<std::tuple<mpm::Index, unsigned, double>>
@@ -337,4 +381,62 @@ std::vector<std::tuple<mpm::Index, unsigned, double>>
     file.close();
   }
   return tractions;
+}
+
+//! Return particles and their cells
+template <unsigned Tdim>
+std::vector<std::array<mpm::Index, 2>>
+    mpm::ReadMeshAscii<Tdim>::read_particles_cells(
+        const std::string& particles_cells_file) {
+
+  // Particle cells
+  std::vector<std::array<mpm::Index, 2>> particles_cells;
+  particles_cells.clear();
+
+  // input file stream
+  std::fstream file;
+  file.open(particles_cells_file.c_str(), std::ios::in);
+
+  try {
+    if (file.is_open() && file.good()) {
+      // Line
+      std::string line;
+      while (std::getline(file, line)) {
+        boost::algorithm::trim(line);
+        std::istringstream istream(line);
+        // ignore comment lines (# or !) or blank lines
+        if ((line.find('#') == std::string::npos) &&
+            (line.find('!') == std::string::npos) && (line != "")) {
+          while (istream.good()) {
+            // ID
+            mpm::Index pid, cid;
+            // Read stream
+            istream >> pid >> cid;
+            particles_cells.emplace_back(std::array<mpm::Index, 2>({pid, cid}));
+          }
+        }
+      }
+    }
+    file.close();
+  } catch (std::exception& exception) {
+    console_->error("Read particles cells: {}", exception.what());
+    file.close();
+  }
+  return particles_cells;
+}
+
+//! Write particles and their cells
+template <unsigned Tdim>
+void mpm::ReadMeshAscii<Tdim>::write_particles_cells(
+    const std::string& particles_cells_file,
+    const std::vector<std::array<mpm::Index, 2>>& particles_cells) {
+
+  // output file stream
+  std::fstream file;
+  file.open(particles_cells_file.c_str(), std::ios::out);
+
+  for (const auto& particle_cell : particles_cells)
+    file << particle_cell[0] << "\t" << particle_cell[1] << "\n";
+
+  file.close();
 }

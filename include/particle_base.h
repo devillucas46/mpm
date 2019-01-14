@@ -74,8 +74,14 @@ class ParticleBase {
   //! Assign cell
   virtual bool assign_cell(const std::shared_ptr<Cell<Tdim>>& cellptr) = 0;
 
+  //! Assign cell id
+  virtual bool assign_cell_id(Index id) = 0;
+
   //! Return cell id
   virtual Index cell_id() const = 0;
+
+  //! Return cell ptr status
+  virtual bool cell_ptr() const = 0;
 
   //! Remove cell
   virtual void remove_cell() = 0;
@@ -84,7 +90,7 @@ class ParticleBase {
   virtual bool compute_shapefn() = 0;
 
   //! Assign volume
-  virtual void assign_volume(unsigned phase, double volume) = 0;
+  virtual bool assign_volume(unsigned phase, double volume) = 0;
 
   //! Return volume
   virtual double volume(unsigned phase) const = 0;

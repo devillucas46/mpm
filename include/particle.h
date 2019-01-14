@@ -27,6 +27,9 @@ class Particle : public ParticleBase<Tdim> {
   //! Define a vector of size dimension
   using VectorDim = Eigen::Matrix<double, Tdim, 1>;
 
+  //! Define DOFs
+  static const unsigned Tdof = (Tdim == 1) ? 1 : 3 * (Tdim - 1);
+
   //! Construct a particle with id and coordinates
   //! \param[in] id Particle id
   //! \param[in] coord coordinates of the particle
@@ -68,8 +71,15 @@ class Particle : public ParticleBase<Tdim> {
   //! \param[in] cellptr Pointer to a cell
   bool assign_cell(const std::shared_ptr<Cell<Tdim>>& cellptr) override;
 
+  //! Assign cell id
+  //! \param[in] id Cell id
+  bool assign_cell_id(Index id) override;
+
   //! Return cell id
   Index cell_id() const override { return cell_id_; }
+
+  //! Return cell ptr status
+  bool cell_ptr() const override { return cell_ != nullptr; }
 
   //! Remove cell associated with the particle
   void remove_cell() override;
@@ -80,7 +90,7 @@ class Particle : public ParticleBase<Tdim> {
   //! Assign volume
   //! \param[in] phase Index corresponding to the phase
   //! \param[in] volume Volume of particle for the phase
-  void assign_volume(unsigned phase, double volume) override;
+  bool assign_volume(unsigned phase, double volume) override;
 
   //! Return volume
   //! \param[in] phase Index corresponding to the phase

@@ -45,6 +45,17 @@ mpm::MPMExplicit<Tdim>::MPMExplicit(std::unique_ptr<IO>&& io)
       throw std::runtime_error("Specified gravity dimension is invalid");
     }
 
+    // Velocity update
+    try {
+      velocity_update_ = analysis_["velocity_update"].template get<bool>();
+    } catch (std::exception& exception) {
+      console_->warn(
+          "{} #{}: Velocity update parameter is not specified, using default "
+          "as false",
+          __FILE__, __LINE__, exception.what());
+      velocity_update_ = false;
+    }
+
     post_process_ = io_->post_processing();
     // Output steps
     output_steps_ = post_process_["output_steps"].template get<mpm::Index>();
@@ -78,9 +89,9 @@ mpm::MPMExplicit<Tdim>::MPMExplicit(std::unique_ptr<IO>&& io)
   }
 }
 
-// Initialise mesh and particles
+// Initialise mesh
 template <unsigned Tdim>
-bool mpm::MPMExplicit<Tdim>::initialise_mesh_particles() {
+bool mpm::MPMExplicit<Tdim>::initialise_mesh() {
   // TODO: Fix phase
   const unsigned phase = 0;
   bool status = true;
@@ -101,6 +112,17 @@ bool mpm::MPMExplicit<Tdim>::initialise_mesh_particles() {
     // Get Mesh reader from JSON object
     const std::string reader =
         mesh_props["mesh_reader"].template get<std::string>();
+
+    bool check_duplicates = true;
+    try {
+      check_duplicates = mesh_props["check_duplicates"].template get<bool>();
+    } catch (std::exception& exception) {
+      console_->warn(
+          "{} #{}: Check duplicates, not specified setting default as true",
+          __FILE__, __LINE__, exception.what());
+      check_duplicates = true;
+    }
+
     // Create a mesh reader
     auto mesh_reader = Factory<mpm::ReadMesh<Tdim>>::instance()->create(reader);
 
@@ -111,9 +133,10 @@ bool mpm::MPMExplicit<Tdim>::initialise_mesh_particles() {
     const auto node_type = mesh_props["node_type"].template get<std::string>();
     // Create nodes from file
     bool node_status = mesh_->create_nodes(
-        gid,                                                    // global id
-        node_type,                                              // node type
-        mesh_reader->read_mesh_nodes(io_->file_name("mesh")));  // coordinates
+        gid,                                                   // global id
+        node_type,                                             // node type
+        mesh_reader->read_mesh_nodes(io_->file_name("mesh")),  // coordinates
+        check_duplicates);  // check duplicates
 
     if (!node_status)
       throw std::runtime_error("Addition of nodes to mesh failed");
@@ -134,6 +157,9 @@ bool mpm::MPMExplicit<Tdim>::initialise_mesh_particles() {
             "Velocity constraints are not properly assigned");
     }
 
+    // Set nodal traction as false if file is empty
+    if (io_->file_name("nodal_tractions").empty()) nodal_tractions_ = false;
+
     auto cells_begin = std::chrono::steady_clock::now();
     // Shape function name
     const auto cell_type = mesh_props["cell_type"].template get<std::string>();
@@ -143,9 +169,10 @@ bool mpm::MPMExplicit<Tdim>::initialise_mesh_particles() {
 
     // Create cells from file
     bool cell_status = mesh_->create_cells(
-        gid,                                                    // global id
-        element,                                                // element tyep
-        mesh_reader->read_mesh_cells(io_->file_name("mesh")));  // Node ids
+        gid,                                                   // global id
+        element,                                               // element tyep
+        mesh_reader->read_mesh_cells(io_->file_name("mesh")),  // Node ids
+        check_duplicates);  // Check duplicates
 
     if (!cell_status)
       throw std::runtime_error("Addition of cells to mesh failed");
@@ -156,10 +183,78 @@ bool mpm::MPMExplicit<Tdim>::initialise_mesh_particles() {
                        cells_end - cells_begin)
                        .count());
 
+  } catch (std::exception& exception) {
+    console_->error("#{}: Reading mesh and particles: {}", __LINE__,
+                    exception.what());
+    status = false;
+  }
+  return status;
+}
+
+// Initialise particles
+template <unsigned Tdim>
+bool mpm::MPMExplicit<Tdim>::initialise_particles() {
+  // TODO: Fix phase
+  const unsigned phase = 0;
+  bool status = true;
+
+  try {
+    // Initialise MPI rank and size
+    int mpi_rank = 0;
+    int mpi_size = 1;
+
+#ifdef USE_MPI
+    MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
+    // Get number of MPI ranks
+    MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
+#endif
+
+    // Get mesh properties
+    auto mesh_props = io_->json_object("mesh");
+    // Get Mesh reader from JSON object
+    const std::string reader =
+        mesh_props["mesh_reader"].template get<std::string>();
+
+    bool check_duplicates = true;
+    try {
+      check_duplicates = mesh_props["check_duplicates"].template get<bool>();
+    } catch (std::exception& exception) {
+      console_->warn(
+          "{} #{}: Check duplicates, not specified setting default as true",
+          __FILE__, __LINE__, exception.what());
+      check_duplicates = true;
+    }
+
+    // Create a mesh reader
+    auto particle_reader =
+        Factory<mpm::ReadMesh<Tdim>>::instance()->create(reader);
+
     auto particles_begin = std::chrono::steady_clock::now();
+
     // Get all particles
-    const auto all_particles =
-        mesh_reader->read_particles(io_->file_name("particles"));
+    std::vector<Eigen::Matrix<double, Tdim, 1>> all_particles;
+
+    // Generate particles
+    bool read_particles_file = false;
+    try {
+      unsigned nparticles_cell =
+          mesh_props["generate_particles_cells"].template get<unsigned>();
+
+      if (nparticles_cell > 0)
+        all_particles = mesh_->generate_material_points(nparticles_cell);
+      else
+        throw std::runtime_error(
+            "Specified # of particles per cell for generation is invalid!");
+
+    } catch (std::exception& exception) {
+      console_->warn("Generate particles is not set, reading particles file");
+      read_particles_file = true;
+    }
+
+    // Read particles from file
+    if (read_particles_file)
+      all_particles =
+          particle_reader->read_particles(io_->file_name("particles"));
     // Get all particle ids
     std::vector<mpm::Index> all_particles_ids(all_particles.size());
     std::iota(all_particles_ids.begin(), all_particles_ids.end(), 0);
@@ -178,9 +273,10 @@ bool mpm::MPMExplicit<Tdim>::initialise_mesh_particles() {
 
     // Create particles from file
     bool particle_status =
-        mesh_->create_particles(particles_ids,  // global id
-                                particle_type,  // particle type
-                                particles);     // coordinates
+        mesh_->create_particles(particles_ids,      // global id
+                                particle_type,      // particle type
+                                particles,          // coordinates
+                                check_duplicates);  // Check duplicates
 
     if (!particle_status)
       throw std::runtime_error("Addition of particles to mesh failed");
@@ -190,6 +286,20 @@ bool mpm::MPMExplicit<Tdim>::initialise_mesh_particles() {
                    std::chrono::duration_cast<std::chrono::milliseconds>(
                        particles_end - particles_begin)
                        .count());
+    try {
+      // Read and assign particles cells
+      if (!io_->file_name("particles_cells").empty()) {
+        bool particles_cells =
+            mesh_->assign_particles_cells(particle_reader->read_particles_cells(
+                io_->file_name("particles_cells")));
+        if (!particles_cells)
+          throw std::runtime_error(
+              "Cell ids are not properly assigned to particles");
+      }
+    } catch (std::exception& exception) {
+      console_->error("{} #{}: Reading particles cells: {}", __FILE__, __LINE__,
+                      exception.what());
+    }
 
     auto particles_locate_begin = std::chrono::steady_clock::now();
     // Locate particles in cell
@@ -204,16 +314,30 @@ bool mpm::MPMExplicit<Tdim>::initialise_mesh_particles() {
                        particles_locate_end - particles_locate_begin)
                        .count());
 
+    // Write particles and cells to file
+    particle_reader->write_particles_cells(
+        io_->output_file("particles-cells", ".txt", uuid_, 0, 0).string(),
+        mesh_->particles_cells());
+
     auto particles_traction_begin = std::chrono::steady_clock::now();
     // Compute volume
     mesh_->iterate_over_particles(
         std::bind(&mpm::ParticleBase<Tdim>::compute_volume,
                   std::placeholders::_1, phase));
 
+    // Read and assign particles volumes
+    if (!io_->file_name("particles_volumes").empty()) {
+      bool particles_volumes = mesh_->assign_particles_volumes(
+          particle_reader->read_particles_volumes(
+              io_->file_name("particles_volumes")));
+      if (!particles_volumes)
+        throw std::runtime_error("Particles volumes are not properly assigned");
+    }
+
     // Read and assign particles tractions
     if (!io_->file_name("particles_tractions").empty()) {
       bool particles_tractions = mesh_->assign_particles_tractions(
-          mesh_reader->read_particles_tractions(
+          particle_reader->read_particles_tractions(
               io_->file_name("particles_tractions")));
       if (!particles_tractions)
         throw std::runtime_error(
@@ -224,8 +348,9 @@ bool mpm::MPMExplicit<Tdim>::initialise_mesh_particles() {
     if (!io_->file_name("particles_stresses").empty()) {
 
       // Get stresses of all particles
-      const auto all_particles_stresses = mesh_reader->read_particles_stresses(
-          io_->file_name("particles_stresses"));
+      const auto all_particles_stresses =
+          particle_reader->read_particles_stresses(
+              io_->file_name("particles_stresses"));
       // Chunked stresses
       std::vector<Eigen::Matrix<double, 6, 1>> particles_stresses;
       chunk_vector_quantities(all_particles_stresses, particles_stresses);
@@ -237,14 +362,14 @@ bool mpm::MPMExplicit<Tdim>::initialise_mesh_particles() {
     }
 
     auto particles_traction_end = std::chrono::steady_clock::now();
-    console_->info("Rank {} Read particle traction: {} ms", mpi_rank,
+    console_->info("Rank {} Read particle traction and stresses: {} ms",
+                   mpi_rank,
                    std::chrono::duration_cast<std::chrono::milliseconds>(
                        particles_traction_end - particles_traction_begin)
                        .count());
 
   } catch (std::exception& exception) {
-    console_->error("#{}: Reading mesh and particles: {}", __LINE__,
-                    exception.what());
+    console_->error("#{}: Reading particles: {}", __LINE__, exception.what());
     status = false;
   }
   return status;
@@ -284,6 +409,37 @@ bool mpm::MPMExplicit<Tdim>::initialise_materials() {
   } catch (std::exception& exception) {
     console_->error("#{}: Reading materials: {}", __LINE__, exception.what());
     status = false;
+  }
+  return status;
+}
+
+//! Apply nodal tractions
+template <unsigned Tdim>
+bool mpm::MPMExplicit<Tdim>::apply_nodal_tractions() {
+  bool status = true;
+  try {
+    // Read and assign nodes tractions
+    if (!io_->file_name("nodal_tractions").empty()) {
+      // Get mesh properties
+      auto mesh_props = io_->json_object("mesh");
+      // Get Mesh reader from JSON object
+      const std::string reader =
+          mesh_props["mesh_reader"].template get<std::string>();
+      // Create a mesh reader
+      auto node_reader =
+          Factory<mpm::ReadMesh<Tdim>>::instance()->create(reader);
+
+      bool nodal_tractions =
+          mesh_->assign_nodal_tractions(node_reader->read_particles_tractions(
+              io_->file_name("nodal_tractions")));
+      if (!nodal_tractions)
+        throw std::runtime_error("Nodal tractions are not properly assigned");
+    } else
+      nodal_tractions_ = false;
+  } catch (std::exception& exception) {
+    console_->error("#{}: Nodal traction: {}", __LINE__, exception.what());
+    status = false;
+    nodal_tractions_ = false;
   }
   return status;
 }

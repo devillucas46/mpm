@@ -72,6 +72,10 @@ bool mpm::Particle<Tdim, Tnphases>::initialise_particle(
 
   // Status
   this->status_ = particle.status;
+
+  // Cell id
+  this->cell_id_ = particle.cell_id;
+  this->cell_ = nullptr;
   return true;
 }
 
@@ -111,6 +115,25 @@ bool mpm::Particle<Tdim, Tnphases>::assign_cell(
       status = cell_->add_particle_id(this->id());
     } else {
       throw std::runtime_error("Point cannot be found in cell!");
+    }
+  } catch (std::exception& exception) {
+    console_->error("{} #{}: {}\n", __FILE__, __LINE__, exception.what());
+    status = false;
+  }
+  return status;
+}
+
+// Assign a cell id to particle
+template <unsigned Tdim, unsigned Tnphases>
+bool mpm::Particle<Tdim, Tnphases>::assign_cell_id(mpm::Index id) {
+  bool status = false;
+  try {
+    // if a cell ptr is null
+    if (cell_ == nullptr && id != std::numeric_limits<Index>::max()) {
+      cell_id_ = id;
+      status = true;
+    } else {
+      throw std::runtime_error("Invalid cell id or cell is already assigned!");
     }
   } catch (std::exception& exception) {
     console_->error("{} #{}: {}\n", __FILE__, __LINE__, exception.what());
@@ -182,14 +205,16 @@ bool mpm::Particle<Tdim, Tnphases>::compute_shapefn() {
       // Get element ptr of a cell
       const auto element = cell_->element_ptr();
 
+      // Zero matrix
+      Eigen::Matrix<double, Tdim, 1> zero;
+      zero.setZero();
+
       // Compute shape function of the particle
-      shapefn_ = element->shapefn(this->xi_, this->natural_size_,
-                                  Eigen::Matrix<double, Tdim, 1>::Zero());
+      shapefn_ = element->shapefn(this->xi_, this->natural_size_, zero);
 
       // Compute bmatrix of the particle for reference cell
       bmatrix_ = element->bmatrix(this->xi_, cell_->nodal_coordinates(),
-                                  this->natural_size_,
-                                  Eigen::Matrix<double, Tdim, 1>::Zero());
+                                  this->natural_size_, zero);
     } else {
       throw std::runtime_error(
           "Cell is not initialised! "
@@ -204,23 +229,34 @@ bool mpm::Particle<Tdim, Tnphases>::compute_shapefn() {
 
 // Assign volume to the particle
 template <unsigned Tdim, unsigned Tnphases>
-void mpm::Particle<Tdim, Tnphases>::assign_volume(unsigned phase,
+bool mpm::Particle<Tdim, Tnphases>::assign_volume(unsigned phase,
                                                   double volume) {
-  this->volume_(phase) = volume;
-  // Compute size of particle in each direction
-  const double length =
-      std::pow(this->volume_(phase), static_cast<double>(1. / Tdim));
-  // Set particle size as length on each side
-  this->size_.fill(length);
+  bool status = true;
+  try {
+    if (volume <= 0.)
+      throw std::runtime_error("Particle volume cannot be negative");
 
-  if (cell_ != nullptr) {
-    // Get element ptr of a cell
-    const auto element = cell_->element_ptr();
+    this->volume_(phase) = volume;
+    // Compute size of particle in each direction
+    const double length =
+        std::pow(this->volume_(phase), static_cast<double>(1. / Tdim));
+    // Set particle size as length on each side
+    this->size_.fill(length);
 
-    // Set local particle size based on volume of element in natural coordinates
-    this->natural_size_.fill(element->unit_element_volume() /
-                             cell_->nparticles());
+    if (cell_ != nullptr) {
+      // Get element ptr of a cell
+      const auto element = cell_->element_ptr();
+
+      // Set local particle size based on volume of element in natural
+      // coordinates
+      this->natural_size_.fill(element->unit_element_volume() /
+                               cell_->nparticles());
+    }
+  } catch (std::exception& exception) {
+    console_->error("{} #{}: {}\n", __FILE__, __LINE__, exception.what());
+    status = false;
   }
+  return status;
 }
 
 // Compute volume of the particle
@@ -314,7 +350,7 @@ bool mpm::Particle<Tdim, Tnphases>::map_mass_momentum_to_nodes(unsigned phase) {
 template <unsigned Tdim, unsigned Tnphases>
 void mpm::Particle<Tdim, Tnphases>::compute_strain(unsigned phase, double dt) {
   // Strain rate
-  Eigen::VectorXd strain_rate = cell_->compute_strain_rate(bmatrix_, phase);
+  const auto strain_rate = cell_->compute_strain_rate(bmatrix_, phase);
   // particle_strain_rate
   Eigen::Matrix<double, 6, 1> particle_strain_rate;
   particle_strain_rate.setZero();
